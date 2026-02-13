@@ -64,7 +64,9 @@ python nasa_bot.py
 ```
 
 ### GitHub Actions 自動化
-本專案已包含 GitHub Actions 設定檔 (`.github/workflows/WeatherBot.yml`)，預設為**每天台灣時間 06:00 (UTC 22:00)** 自動執行氣象廣播。
+本專案已包含 GitHub Actions 設定檔：
+- **氣象廣播** (`WeatherBot.yml`)：預設為**每天台灣時間 06:00 (UTC 22:00)** 自動執行。
+- **NASA 宇宙日記** (`nasa.yml`)：預設為**每天台灣時間 22:00 (UTC 14:00)** 自動執行。
 
 若要啟用，請確保 GitHub Repository 的 **Settings -> Secrets and variables -> Actions** 中已設定好上述的環境變數。
 
