@@ -74,13 +74,17 @@ python nasa_bot.py
 
 ## 📂 專案結構
 ```
-MyWeatherBot/
+TaiwanWeatherBot/
 ├── .github/workflows/
-│   └── WeatherBot.yml    # GitHub Actions 自動化流程
+│   ├── WeatherBot.yml    # 台灣氣象廣播排程
+│   └── nasa.yml          # NASA 宇宙日記排程
 ├── weather_bot.py        # 氣象機器人主程式
 ├── nasa_bot.py           # NASA 機器人主程式
 ├── requirements.txt      # Python 套件清單
+├── .gitignore            # Git 忽略清單
+├── LICENSE               # 授權文件
 └── README.md             # 專案說明文件
+
 ```
 
 ---
