@@ -2,12 +2,20 @@ import requests
 from google import genai  # 🟢 改用新版 SDK
 import os
 import sys
+from dotenv import load_dotenv
+
+# 載入 .env 檔案
+load_dotenv()
 
 # ================= 設定區 =================
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 CWA_API_KEY = os.environ.get("CWA_API_KEY")
 # ==========================================
+
+# Line Bot 設定
+LINE_TOKEN = os.environ.get("LINE_TOKEN")
+LINE_USER_ID = os.environ.get("LINE_USER_ID")
 
 # 1. 檢查鑰匙有沒有帶到 (除錯關鍵)
 if not CWA_API_KEY:
@@ -57,7 +65,17 @@ def get_taiwan_weather_data():
             else: icon = "☁️"
             
             display_line = f"**{city}**\n└ {icon} {min_t}-{max_t}°C | 降雨 {pop}%"
-            weather_data[city] = display_line
+            # 🟢 [關鍵修改] 這裡把資料分兩份：
+            # 1. "display": 專門給 Discord 用的字串 (保留 **粗體** 格式)
+            # 2. 其他欄位 (city, min_t, etc): 給 Line Flex Message 用 (乾淨的數據，方便重新排版)
+            weather_data[city] = {
+                "display": display_line,  # 給 Discord 吃這行
+                "city": city,             # 以下給 Line 吃
+                "icon": icon,
+                "min_t": min_t,
+                "max_t": max_t,
+                "pop": pop_val
+            }
             raw_data_list.append(f"{city}: {wx}, 氣溫{min_t}-{max_t}, 降雨{pop}%")
 
         start_time = location_list[0]['weatherElement'][0]['time'][0]['startTime']
@@ -114,7 +132,9 @@ def send_webhook(weather_data, ai_comment, time_range):
         region_content = ""
         for city in cities:
             if city in weather_data:
-                region_content += weather_data[city] + "\n"
+                # 🟢 [Discord 專用] 這裡只拿 "display" 那一格
+                # 所以 Discord 收到的還是原本的格式 (含粗體)，完全不受 Line 改版的影響
+                region_content += weather_data[city]["display"] + "\n"
         
         if region_content:
             embed["fields"].append({
@@ -137,9 +157,158 @@ def send_webhook(weather_data, ai_comment, time_range):
     except Exception as e:
         print(f"❌ Discord 發送失敗: {e}")
 
+def generate_flex_message(weather_data, ai_comment, time_range):
+    """產生 Line Flex Message JSON"""
+    contents = []
+
+    # 1. 標題區塊
+    header = {
+        "type": "box",
+        "layout": "vertical",
+        "contents": [
+            {"type": "text", "text": "🌤️ 全台氣象播報", "weight": "bold", "size": "xl", "color": "#ffffff"},
+            {"type": "text", "text": f"📅 {time_range}", "size": "xs", "color": "#eeeeee", "margin": "sm"}
+        ],
+        "backgroundColor": "#00B900", # Line Green
+        "paddingAll": "lg"
+    }
+
+    # 2. 內容區塊 (分區顯示)
+    body_contents = []
+    
+    for region_name, cities_list in REGION_MAP.items():
+        # 區域標題
+        body_contents.append({
+            "type": "box",
+            "layout": "vertical",
+            "margin": "lg",
+            "contents": [
+                {"type": "text", "text": region_name, "weight": "bold", "color": "#1DB446", "size": "sm"},
+                {"type": "separator", "margin": "sm"}
+            ]
+        })
+
+        # 城市列表
+        for city in cities_list:
+            if city in weather_data:
+                d = weather_data[city]
+                pop_color = "#ff3333" if d['pop'] >= 50 else "#666666"
+                
+                row = {
+                    "type": "box",
+                    "layout": "horizontal",
+                    "margin": "sm",
+                    "contents": [
+                        {"type": "text", "text": d['city'], "size": "sm", "flex": 2, "color": "#333333"},
+                        {"type": "text", "text": d['icon'], "size": "sm", "flex": 1, "align": "center"},
+                        {"type": "text", "text": f"{d['min_t']}-{d['max_t']}°", "size": "sm", "flex": 2, "align": "center", "color": "#333333"},
+                        {"type": "text", "text": f"☂️{d['pop']}%", "size": "sm", "flex": 2, "align": "end", "color": pop_color}
+                    ]
+                }
+                body_contents.append(row)
+
+    # 3. AI 點評區塊 in Footer
+    footer = {
+        "type": "box",
+        "layout": "vertical",
+        "contents": [
+            {"type": "separator", "margin": "md"},
+            {"type": "text", "text": "🐭 Ai氣象鼠點評", "weight": "bold", "size": "sm", "margin": "md", "color": "#555555"},
+            {"type": "text", "text": ai_comment, "size": "xs", "color": "#777777", "wrap": True, "margin": "sm"}
+        ],
+        "backgroundColor": "#f8f8f8",
+        "paddingAll": "md"
+    }
+
+    # 組合 Flex Message
+    flex_message = {
+        "type": "flex",
+        "altText": f"🌤️ 全台氣象播報 ({time_range})",
+        "contents": {
+            "type": "bubble",
+            "header": header,
+            "body": {
+                "type": "box",
+                "layout": "vertical",
+                "contents": body_contents
+            },
+            "footer": footer
+        }
+    }
+    return flex_message
+
+def send_line_message(weather_data, ai_comment, time_range):
+    # 檢查 Token 是否存在
+    if not LINE_TOKEN:
+        print("⚠️ 未設定 LINE_TOKEN，跳過 LINE 發送。")
+        return
+
+    # 檢查是否有 User ID 或 API URL
+    subscriber_api_url = os.getenv("SUBSCRIBER_API_URL")
+    if not LINE_USER_ID and not subscriber_api_url:
+        print("⚠️ 未設定 LINE_USER_ID 且無 SUBSCRIBER_API_URL，跳過 LINE 發送。")
+        return
+
+    print("🚀 正在發送 Line Flex Message...")
+    
+    # 產生 Flex Message payload
+    flex_payload = generate_flex_message(weather_data, ai_comment, time_range)
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {LINE_TOKEN}"
+    }
+    
+    payload = {
+        "to": "",  # 會在迴圈中設定
+        "messages": [flex_payload]
+    }
+
+    # 取得訂閱者列表 (合併 .env 與 GAS API)
+    user_ids = set()
+    
+    # 1. 從 .env 讀取
+    if LINE_USER_ID:
+        for uid in LINE_USER_ID.split(","):
+            if uid.strip():
+                user_ids.add(uid.strip())
+
+    # 2. 從 GAS API 讀取 (自動訂閱)
+    subscriber_api_url = os.getenv("SUBSCRIBER_API_URL")
+    if subscriber_api_url:
+        try:
+            print(f"📡 正在從 GAS API 取得訂閱者列表...")
+            resp = requests.get(subscriber_api_url)
+            if resp.status_code == 200:
+                api_ids = resp.json()
+                print(f"✅ 取得 {len(api_ids)} 個訂閱者: {api_ids}")
+                for uid in api_ids:
+                    user_ids.add(uid)
+            else:
+                print(f"⚠️ GAS API 回傳錯誤: {resp.status_code}")
+        except Exception as e:
+            print(f"⚠️ 讀取訂閱者 API 失敗: {e}")
+
+    if not user_ids:
+        print("⚠️ 無任何訂閱者 ID (LINE_USER_ID 未設定且 API 無回傳)")
+        return
+
+    for uid in user_ids:
+        payload["to"] = uid
+        try:
+            response = requests.post("https://api.line.me/v2/bot/message/push", headers=headers, json=payload)
+            if response.status_code == 200:
+                print(f"✅ Line 發送成功！(Target: {uid})")
+            else:
+                print(f"❌ Line 發送失敗 (Target: {uid}): {response.status_code} {response.text}")
+        except Exception as e:
+            print(f"❌ Line 發送例外 (Target: {uid}): {e}")
+
 if __name__ == "__main__":
     w_data, raw_list, t_range = get_taiwan_weather_data()
     if w_data:
         comment = get_ai_comment(raw_list)
-        send_webhook(w_data, comment, t_range)
-
+        comment = get_ai_comment(raw_list)
+        if WEBHOOK_URL:
+            send_webhook(w_data, comment, t_range)
+        send_line_message(w_data, comment, t_range)

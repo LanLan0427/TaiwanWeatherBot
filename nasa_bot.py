@@ -3,15 +3,24 @@ from google import genai
 import os
 import sys
 import time
+from datetime import datetime
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from bs4 import BeautifulSoup
+from dotenv import load_dotenv
+
+# 載入 .env 檔案
+load_dotenv()
 
 # ================= 設定區 =================
 # 從 GitHub Secrets 讀取金鑰，安全又方便
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 NASA_API_KEY = os.environ.get("NASA_API_KEY", "DEMO_KEY")
+
+# Line Bot 設定
+LINE_TOKEN = os.environ.get("LINE_TOKEN")
+LINE_USER_ID = os.environ.get("LINE_USER_ID")
 # ==========================================
 
 # --- 功能 1: 嘗試從 API 抓取 (正門) ---
@@ -98,42 +107,25 @@ def get_ai_content_v2(title, explanation):
             contents=prompt
         )
         text = response.text
-        print(f"🤖 AI 原始回覆 (Debug):\n{text}")
+        # print(f"🤖 AI 原始回覆 (Debug):\n{text}")
+        # print("======== (End of AI Response) ========")
 
         # === 🟢 超強段落解析邏輯 (State Machine) ===
         diary_lines = []
         knowledge_lines = []
         current_mode = None # 目前正在讀取哪個區塊 (diary / knowledge)
 
-        lines = text.split('\n')
-        for line in lines:
-            line = line.strip()
-            if not line: continue # 跳過空行
+        # === 🟢 超強段落解析邏輯 (Regex Version) ===
+        import re
+        
+        # 移除可能的 Markdown 標記 (如 **日記：**, ### 日記)
+        clean_text = re.sub(r'[\*\#]', '', text)
+        
+        diary_match = re.search(r'日記[:：](.*?)(?=科普[:：]|$)', clean_text, re.DOTALL)
+        knowledge_match = re.search(r'科普[:：](.*?)(?=$)', clean_text, re.DOTALL)
 
-            # 1. 偵測標頭：如果是「日記」開頭
-            if "日記" in line and ("：" in line or ":" in line):
-                current_mode = "diary"
-                # 如果同一行就有字 (例如: "日記：今天...")，把標頭去掉後留下來
-                content = line.replace("：", ":").split(":", 1)[1].strip()
-                if content: diary_lines.append(content)
-                continue
-
-            # 2. 偵測標頭：如果是「科普」開頭
-            elif "科普" in line and ("：" in line or ":" in line):
-                current_mode = "knowledge"
-                content = line.replace("：", ":").split(":", 1)[1].strip()
-                if content: knowledge_lines.append(content)
-                continue
-
-            # 3. 根據目前的模式，把內容加進去
-            if current_mode == "diary":
-                diary_lines.append(line)
-            elif current_mode == "knowledge":
-                knowledge_lines.append(line)
-
-        # 把抓到的多行內容接起來
-        diary = " ".join(diary_lines) if diary_lines else "（AI 正在看著星空發呆...）"
-        knowledge = " ".join(knowledge_lines) if knowledge_lines else "（數據訊號干擾...）"
+        diary = diary_match.group(1).strip() if diary_match else "（AI 正在看著星空發呆...）"
+        knowledge = knowledge_match.group(1).strip() if knowledge_match else "（數據訊號干擾...）"
         
         return diary, knowledge
 
@@ -183,7 +175,185 @@ def send_discord(data, diary, knowledge):
     except Exception as e:
         print(f"❌ Discord 發送失敗: {e}")
 
-# --- 主程式 ---
+def generate_flex_message(data, diary, knowledge):
+    """產生 NASA 宇宙日報 Flex Message JSON"""
+    
+    # 0. 準備資料
+    title = data.get('title', 'NASA Unknown Star')
+    date = data.get('date', 'Unknown Date')
+    image_url = data.get('url')
+    hd_url = data.get('hdurl', image_url)
+    
+    # 確保圖片 URL 是 HTTPS (Flex Message Hero 圖片必須是 HTTPS)
+    if not image_url or not image_url.startswith("https"):
+        image_url = "https://apod.nasa.gov/apod/calendar/allyears/2024/0101.jpg" # 預設圖
+    
+    # 1. 標題區塊 (Header)
+    header = {
+        "type": "box",
+        "layout": "vertical",
+        "contents": [
+            {"type": "text", "text": "🌌 NASA 宇宙日報", "weight": "bold", "size": "sm", "color": "#A9A9A9"},
+            {"type": "text", "text": title, "weight": "bold", "size": "xl", "color": "#FFFFFF", "wrap": True, "margin": "md"},
+            {"type": "text", "text": f"📅 {date}", "size": "xs", "color": "#D3D3D3", "margin": "sm"}
+        ],
+        "paddingAll": "lg"
+    }
+
+    # 2. 英雄圖片 (Hero)
+    hero = {
+        "type": "image",
+        "url": image_url,
+        "size": "full",
+        "aspectRatio": "20:13",
+        "aspectMode": "cover",
+        "action": {
+            "type": "uri",
+            "uri": hd_url
+        }
+    }
+
+    # 3. 內容區塊 (Body)
+    body = {
+        "type": "box",
+        "layout": "vertical",
+        "contents": [
+            # 📖 航行日誌
+            {"type": "text", "text": "📖 航行日誌", "weight": "bold", "size": "sm", "color": "#8A2BE2"}, # BlueViolet
+            {"type": "text", "text": diary, "size": "sm", "color": "#555555", "wrap": True, "margin": "sm", "lineSpacing": "4px"},
+            
+            {"type": "separator", "margin": "lg"},
+            
+            # 🔭 天文小知識
+            {"type": "text", "text": "🔭 天文小知識", "weight": "bold", "size": "sm", "color": "#4169E1", "margin": "lg"}, # RoyalBlue
+            {"type": "text", "text": knowledge, "size": "sm", "color": "#555555", "wrap": True, "margin": "sm", "lineSpacing": "4px"}
+        ],
+        "paddingAll": "lg",
+        "backgroundColor": "#F8F8FF" # GhostWhite 微微的藍白
+    }
+
+    # 4. 底部按鈕 (Footer)
+    footer = {
+        "type": "box",
+        "layout": "vertical",
+        "contents": [
+            {
+                "type": "button",
+                "action": {
+                    "type": "uri",
+                    "label": "👉 下載高清大圖",
+                    "uri": hd_url
+                },
+                "style": "secondary",
+                "color": "#4169E1",
+                "height": "sm"
+            },
+            {
+                "type": "button",
+                "action": {
+                    "type": "uri",
+                    "label": "🔗 前往 NASA 官網",
+                    "uri": "https://apod.nasa.gov/apod/astropix.html"
+                },
+                "margin": "sm",
+                "height": "sm",
+                "style": "link"
+            },
+            {"type": "text", "text": "Powered by NASA & Gemini AI", "size": "xxs", "color": "#aaaaaa", "align": "center", "margin": "md"}
+        ],
+        "paddingAll": "lg"
+    }
+
+    # 5. 組合樣式 (Bubble)
+    # Styles 設定 header 為深色背景
+    styles = {
+        "header": {
+            "backgroundColor": "#191970" # MidnightBlue
+        }
+    }
+
+    flex_message = {
+        "type": "flex",
+        "altText": f"🌌 NASA 宇宙日報: {title}",
+        "contents": {
+            "type": "bubble",
+            "header": header,
+            "hero": hero,
+            "body": body,
+            "footer": footer,
+            "styles": styles
+        }
+    }
+    return flex_message
+
+def send_line_message(data, diary, knowledge):
+    # 檢查 Token 是否存在
+    if not LINE_TOKEN:
+        print("⚠️ 未設定 LINE_TOKEN，跳過 LINE 發送。")
+        return
+
+    # 檢查是否有 User ID 或 API URL
+    subscriber_api_url = os.getenv("SUBSCRIBER_API_URL")
+    if not LINE_USER_ID and not subscriber_api_url:
+        print("⚠️ 未設定 LINE_USER_ID 且無 SUBSCRIBER_API_URL，跳過 LINE 發送。")
+        return
+
+    print("🚀 正在發送 Line Flex Message...")
+    
+    # 產生 Flex Message payload
+    flex_payload = generate_flex_message(data, diary, knowledge)
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {LINE_TOKEN}"
+    }
+
+    payload = {
+        "to": "", # 會在迴圈中設定
+        "messages": [flex_payload]
+    }
+
+    # 支援發送給多個使用者或群組 (以逗號分隔)
+    # 取得訂閱者列表 (合併 .env 與 GAS API)
+    user_ids = set()
+    
+    # 1. 從 .env 讀取
+    if LINE_USER_ID:
+        for uid in LINE_USER_ID.split(","):
+            if uid.strip():
+                user_ids.add(uid.strip())
+
+    # 2. 從 GAS API 讀取 (自動訂閱)
+    subscriber_api_url = os.getenv("SUBSCRIBER_API_URL")
+    if subscriber_api_url:
+        try:
+            print(f"📡 正在從 GAS API 取得訂閱者列表...")
+            resp = requests.get(subscriber_api_url)
+            if resp.status_code == 200:
+                api_ids = resp.json()
+                print(f"✅ 取得 {len(api_ids)} 個訂閱者: {api_ids}")
+                for uid in api_ids:
+                    user_ids.add(uid)
+            else:
+                print(f"⚠️ GAS API 回傳錯誤: {resp.status_code}")
+        except Exception as e:
+            print(f"⚠️ 讀取訂閱者 API 失敗: {e}")
+    
+    if not user_ids:
+        print("⚠️ 無任何訂閱者 ID (LINE_USER_ID 未設定且 API 無回傳)")
+        return
+
+    for uid in user_ids:
+        payload["to"] = uid
+        try:
+            response = requests.post("https://api.line.me/v2/bot/message/push", headers=headers, json=payload)
+            if response.status_code == 200:
+                print(f"✅ Line 發送成功！(Target: {uid})")
+            else:
+                print(f"❌ Line 發送失敗 (Target: {uid}): {response.status_code} {response.text}")
+        except Exception as e:
+            print(f"❌ Line 發送例外 (Target: {uid}): {e}")
+
 if __name__ == "__main__":
     if not WEBHOOK_URL or not GEMINI_API_KEY:
         print("❌ 錯誤：請檢查 GitHub Secrets 是否設定正確")
@@ -199,7 +369,9 @@ if __name__ == "__main__":
         # 檢查是不是圖片 (影片無法顯示在 Embed image)
         if "image" in nasa_data.get('media_type', 'image'):
             d, k = get_ai_content_v2(nasa_data['title'], nasa_data.get('explanation', '無原文解釋'))
-            send_discord(nasa_data, d, k)
+            if WEBHOOK_URL:
+                send_discord(nasa_data, d, k)
+            send_line_message(nasa_data, d, k)
         else:
             print(f"⚠️ 今天 NASA 給的是影片，跳過不發圖。")
     else:
