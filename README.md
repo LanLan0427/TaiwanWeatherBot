@@ -68,6 +68,10 @@ python nasa_bot.py
 - **氣象廣播** (`WeatherBot.yml`)：預設為**每天台灣時間 06:00 (UTC 22:00)** 自動執行。
 - **NASA 宇宙日記** (`nasa.yml`)：預設為**每天台灣時間 22:00 (UTC 14:00)** 自動執行。
 
+> [!TIP]
+> **預設為停用狀態**：為了避免與您的私有專案重複執行，此儲存庫的自動排程預設為**註解 (Disabled)** 狀態。
+> 若您 Fork 本專案並希望啟用自動廣播，請編輯 `.github/workflows/*.yml` 檔案，將 `schedule` 區塊的註解 (`#`) 移除即可。
+
 若要啟用，請確保 GitHub Repository 的 **Settings -> Secrets and variables -> Actions** 中已設定好上述的環境變數。
 
 ---
