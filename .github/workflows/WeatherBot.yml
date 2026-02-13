@@ -1,9 +1,10 @@
 name: 每日氣象廣播
 
+# on:
+#   schedule:
+#     # 台灣時間 06:00
+#     - cron: '0 22 * * *'
 on:
-  schedule:
-    # 台灣時間 06:00
-    - cron: '0 22 * * *'
   workflow_dispatch:
 
 jobs:

@@ -1,9 +1,10 @@
 name: NASA 每日宇宙日記
 
+# on:
+#   schedule:
+#     # 每天台灣時間晚上 10 點 (UTC 14:00)
+#     - cron: '0 14 * * *'
 on:
-  schedule:
-    # 每天台灣時間晚上 10 點 (UTC 14:00)
-    - cron: '0 14 * * *'
   workflow_dispatch:
 
 jobs:
